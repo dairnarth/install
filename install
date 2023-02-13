@@ -17,13 +17,16 @@ def getUserPass():
     return in1
 
 # Defaults
-vm = False
+aur = True
 config = True
+vm = False
 for arg in sys.argv:
-    if arg == '--vm':
-        vm = True
+    if arg == '--no-aur':
+        aur = False
     if arg == '--no-config':
         config = False
+    if arg == '--vm':
+        vm = True
 
 hostname = 'arch.vm.' + str(datetime.datetime.now().strftime('%y%m%d.%H%M%S')) if vm else input('Hostname: ')
 
@@ -181,9 +184,10 @@ with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware', 'sud
                 print(archinstall.SysCommand(f"{archChroot} git clone {program['url']} {progDir}"), end='')
                 print(archinstall.SysCommand(f"{archChroot} bash -c '(cd {progDir} && {program['build']})'"), end='')
             print(f"Installing AUR packages:")
-            for program in programs['aur']:
-                print(f"Installing {program}:")
-                print(archinstall.SysCommand(f"{archChroot} paru --noconfirm --skipreview -S {program}"))
+            if aur:
+                for program in programs['aur']:
+                    print(f"Installing {program}:")
+                    print(archinstall.SysCommand(f"{archChroot} paru --noconfirm --skipreview -S {program}"))
 
             print(f":: Configuring {user['name']}")
             print(archinstall.SysCommand(f"{archChroot} rm {user['home']}/.bash_logout {user['home']}/.bash_profile {user['home']}/.bashrc "), end='')
