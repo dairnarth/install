@@ -1,0 +1,192 @@
+#!/bin/env python3
+
+import archinstall, getpass, re, socket, time, sys, datetime, os
+from archinstall import User, Subvolume
+
+assert socket.gethostname() == 'archiso', 'This program should only be run on archiso.'
+assert archinstall.has_uefi() is True, 'This program should only be run in UEFI mode.'
+
+# Username and Password
+def getUserPass():
+    while 'in1' not in locals() or len(in1) == 0 or in1 != in2:
+        if 'in1' in locals():
+            print('Passwords must be at least 1 character in length and must match.')
+        in1 = getpass.getpass(prompt='Password: ')
+        in2 = getpass.getpass(prompt='Verify:   ')
+
+    return in1
+
+# Defaults
+vm = False
+config = True
+for arg in sys.argv:
+    if arg == '--vm':
+        vm = True
+    if arg == '--no-config':
+        config = False
+
+hostname = 'arch.vm.' + str(datetime.datetime.now().strftime('%y%m%d.%H%M%S')) if vm else input('Hostname: ')
+
+user = {
+    'name': input('Username: '),
+    'password': getUserPass(),
+}
+user['home'] = '/home/' + user['name']
+
+programs = [[]]
+with open('./programs') as programlist:
+    for program in [program.rstrip() for program in programlist if not re.compile(r'^#.*').match(program)]:
+        programs.append([]) if not program else programs[-1].append(program)
+    programs = dict(zip(['pacman', 'src', 'aur'], programs))
+    for i in range(len(programs['src'])):
+        programs['src'][i] = dict(zip(['name', 'url', 'build'], programs['src'][i].split(', ')))
+
+# Format Drive
+drive = archinstall.select_disk(archinstall.all_blockdevices(partitions=False))
+drive.keep_partitions = False
+driveLayout = {
+    drive.path: {
+        'partitions': [{
+            'type': 'primary',
+            'start': '1MiB',
+            'size': '513Mib',
+            'boot': True,
+            'encrypted': False,
+            'wipe': True,
+            'mountpoint': '/boot',
+            'filesystem': {
+                'format': 'fat32'
+            }
+        }, {
+            'type': 'primary',
+            'start': '513MiB',
+            'size': '100%',
+            'boot': False,
+            'encrypted': False,
+            'wipe': True,
+            'mountpoint': None,
+            'filesystem': {
+                'format': 'btrfs',
+                'mount_options': ['compress=zstd']
+            },
+            'btrfs': {
+                'subvolumes': [
+                    Subvolume(name='@',           mountpoint='/',                     compress=False, nodatacow=False),
+                    Subvolume(name='@home',       mountpoint='/home',                 compress=False, nodatacow=False),
+                    Subvolume(name='@log',        mountpoint='/var/log',              compress=False, nodatacow=False),
+                    Subvolume(name='@pkg',        mountpoint='/var/cache/pacman/pkg', compress=False, nodatacow=False),
+                    Subvolume(name='@.snapshots', mountpoint='/.snapshots',           compress=False, nodatacow=False)
+                ]
+            }
+        }]
+    }
+}
+
+with archinstall.Filesystem(drive, archinstall.GPT) as fs:
+    print(f":: Formatting {drive.path}.")
+
+    mode = archinstall.GPT
+    if archinstall.has_uefi() is False:
+        mode = archinstall.MBR
+
+    with archinstall.Filesystem(drive, mode) as fs:
+        fs.load_layout(driveLayout[drive.path])
+
+with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware'], kernels=['linux']) as installation:
+    print(f":: Mounting partitions on {drive.path}.")
+    installation.mount_ordered_layout(driveLayout)
+
+    while archinstall.service_state('reflector') not in ('dead', 'failed'):
+        time.sleep(1)
+
+    archinstall.SysCommand('timedatectl set-ntp true')
+
+    mirrors = {'United Kingdom': archinstall.list_mirrors()['United Kingdom']}
+    archinstall.use_mirrors(mirrors)
+
+    pacConfPath = archinstall.pathlib.Path("/etc/pacman.conf")
+    with pacConfPath.open() as pacConfRead:
+        lines = pacConfRead.read().split("\n")
+    with pacConfPath.open("w") as pacConf:
+        for line in lines:
+            if "ParallelDownloads" in line:
+                pacConf.write(f"ParallelDownloads = 15\nILoveCandy\nColor\n")
+            else:
+                pacConf.write(f"{line}\n")
+
+    print(":: Setting up system.")
+    if installation.minimal_installation(hostname=hostname, locales=['en_GB.UTF-8 UTF-8', 'en_US.UTF-8 UTF-8']):
+        installation.set_mirrors(mirrors)
+        installation.setup_swap()
+
+        # Reimplement add_systemd_bootloader()
+        for partition in installation.partitions:
+            if partition.filesystem == 'btrfs':
+                rootPart = partition.part_uuid
+
+        installation.pacstrap('efibootmgr')
+        try:
+            archinstall.SysCommand(f'/usr/bin/arch-chroot {installation.target} bootctl --path=/boot install')
+        except archinstall.SysCallError:
+            archinstall.SysCommand(f'/usr/bin/arch-chroot {installation.target} bootctl --no-variables --path=/boot install')
+
+        entrylines = ['title Arch Linux', 'linux /vmlinuz-linux']
+        if not archinstall.is_vm():
+            vendor = archinstall.cpu_vendor()
+            if vendor == "AuthenticAMD":
+                entrylines.append('initrd /amd-ucode.img')
+            elif vendor == "GenuineIntel":
+                entrylines.append('initrd /intel-ucode.img')
+        entrylines += ['initrd /initramfs-linux.img', f"options root=PARTUUID={rootPart} rootflags=subvol=@ rw"]
+
+        if not os.path.exists(f'{installation.target}/boot/loader'):
+            os.makedirs(f'{installation.target}/boot/loader')
+        if not os.path.exists(f'{installation.target}/boot/loader/entries'):
+            os.makedirs(f'{installation.target}/boot/loader/entries')
+
+        with open('/mnt/boot/loader/loader.conf', 'w') as loader:
+            loader.writelines(line + '\n' for line in ['default arch.conf',
+                                                       'timeout 0',
+                                                       'console-mode max',
+                                                       'editor no',
+                                                       'autofirmware no'])
+        with open('/mnt/boot/loader/entries/arch.conf', 'w') as entry:
+            entry.writelines(line + '\n' for line in entrylines)
+
+        installation.helper_flags['bootloader'] = 'systemd'
+
+        # TODO: install network manager
+
+        installation.create_users(User(user['name'], user['password'], True))
+        with open(f"{installation.target}/etc/sudoers.d/00_{user['name']}", 'w') as sudoer:
+            sudoer.write(f"{user['name']} ALL=(ALL) NOPASSWD: ALL")
+
+        installation.set_timezone('Europe/London')
+        installation.activate_time_syncronization()
+        installation.set_keyboard_language('uk')
+        installation.genfstab()
+
+        # Install extra packages and dotfiles
+        if config:
+            print(':: Installing packages')
+            installation.add_additional_packages(' '.join(programs['pacman']))
+
+            archChroot = '/usr/bin/arch-chroot /mnt sudo -i -u ' + user['name']
+            if not os.path.exists(f"/mnt{user['home']}/.src"):
+                os.makedirs(f"/mnt{user['home']}/.src")
+                os.chown(f"/mnt{user['home']}/.src", 1000, 1000)
+            for program in programs['src']:
+                print(f"Installing {program['name']}:")
+                progDir = user['home'] + '/.src/' + program['name']
+                print(archinstall.SysCommand(f"{archChroot} git clone {program['url']} {progDir}"), end='')
+                print(archinstall.SysCommand(f"{archChroot} bash -c '(cd {progDir} && {program['build']})'"), end='')
+            print(f"Installing AUR packages:")
+            for program in programs['aur']:
+                print(f"Installing {program}:")
+                print(archinstall.SysCommand(f"{archChroot} paru --noconfirm --skipreview -S {program}"))
+
+            print(f":: Configuring {user['name']}")
+            print(archinstall.SysCommand(f"{archChroot} rm {user['home']}/.bash_logout {user['home']}/.bash_profile {user['home']}/.bashrc "), end='')
+            print(archinstall.SysCommand(f"{archChroot} git clone https://github.com/dairnarth/.dotfiles {user['home']}/.dotfiles"), end='')
+            for package in [package.rstrip().decode() for package in archinstall.SysCommand('/usr/bin/arch-chroot /mnt sudo -i -u dch ls -1 /home/dch/.dotfiles/stow')]:
+                print(archinstall.SysCommand(f"{archChroot} stow -Svd {user['home']}/.dotfiles/stow -t {user['home']}/ {package}"), end='')

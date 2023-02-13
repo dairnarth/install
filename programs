@@ -1,0 +1,57 @@
+# pacman
+base-devel
+texlive-most
+xorg
+bc
+dunst
+exa
+firefox
+fzf
+ghc
+gimp
+htop
+light
+mpv
+musescore
+neovim
+nitrogen
+pamixer
+pavucontrol
+pdfarranger
+picom
+qbittorrent
+qsynth
+qutebrowser
+ranger
+rclone
+ripgrep-all
+rsync
+sshfs
+stack
+stow
+sxiv
+tidy
+ttf-anonymous-pro
+unclutter
+unrar
+vmpk
+xdo
+xdotool
+xorg-xinit
+
+# src [name, url, build method]
+dwm, https://github.com/dairnarth/dwm, sudo make clean install
+dmenu, https://github.com/dairnarth/dmenu, sudo make clean install
+st, https://github.com/dairnarth/st, sudo make clean install
+ble.sh, https://github.com/akinomyoga/ble.sh, make install
+paru, https://aur.archlinux.org/paru-bin, makepkg -si --noconfirm
+
+# aur
+abcm2ps
+abcmidi
+cider
+kmonad-bin
+md2pdf
+paru-bin
+pmidi
+smu
