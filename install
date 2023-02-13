@@ -18,8 +18,8 @@ def getUserPass():
 
 # Defaults
 aur = True
-config = True
 vm = False
+config = True
 for arg in sys.argv:
     if arg == '--no-aur':
         aur = False
@@ -194,3 +194,5 @@ with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware', 'sud
             print(archinstall.SysCommand(f"{archChroot} git clone https://github.com/dairnarth/.dotfiles {user['home']}/.dotfiles"), end='')
             for package in [package.rstrip().decode() for package in archinstall.SysCommand('/usr/bin/arch-chroot /mnt sudo -i -u dch ls -1 /home/dch/.dotfiles/stow')]:
                 print(archinstall.SysCommand(f"{archChroot} stow -Svd {user['home']}/.dotfiles/stow -t {user['home']}/ {package}"), end='')
+
+archinstall.SysCommand('reboot')
