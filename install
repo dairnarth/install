@@ -92,7 +92,7 @@ with archinstall.Filesystem(drive, archinstall.GPT) as fs:
     with archinstall.Filesystem(drive, mode) as fs:
         fs.load_layout(driveLayout[drive.path])
 
-with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware'], kernels=['linux']) as installation:
+with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware', 'sudo'], kernels=['linux']) as installation:
     print(f":: Mounting partitions on {drive.path}.")
     installation.mount_ordered_layout(driveLayout)
 
