@@ -19,12 +19,9 @@ def getUserPass():
 # Defaults
 aur = True
 vm = False
-config = True
 for arg in sys.argv:
     if arg == '--no-aur':
         aur = False
-    if arg == '--no-config':
-        config = False
     if arg == '--vm':
         vm = True
 
@@ -158,7 +155,8 @@ with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware', 'sud
 
         installation.helper_flags['bootloader'] = 'systemd'
 
-        # TODO: install network manager
+        installation.pacstrap('networkmanager')
+        print(archinstall.SysCommand(f'/usr/bin/arch-chroot {installation.target} systemctl enable NetworkManager'))
 
         installation.create_users(User(user['name'], user['password'], True))
         with open(f"{installation.target}/etc/sudoers.d/00_{user['name']}", 'w') as sudoer:
@@ -170,7 +168,7 @@ with archinstall.Installer('/mnt', base_packages=['base', 'linux-firmware', 'sud
         installation.genfstab()
 
         # Install extra packages and dotfiles
-        if config:
+        if user['name'] == 'dch':
             print(':: Installing packages')
             installation.add_additional_packages(' '.join(programs['pacman']))
 
