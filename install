@@ -1,0 +1,187 @@
+#!/bin/bash
+
+name="${0##*/}"
+dir="${0%$name}"
+error=false
+
+noconfig=false
+vm=false
+while getopts 'nv' OPTS; do
+    case "$OPTS" in
+        n) noconfig=true;;
+        v) vm=true;;
+    esac
+done
+
+error() {
+    printf '%s: error:' "$name" 1>&2
+    printf '\t%s\n' "$@" 1>&2
+    error=true
+}
+
+[[ "$(< /etc/hostname)" != "archiso" ]] \
+    && error 'This script should only be run on archiso.'
+ping -c 1 google.com &>/dev/null \
+    || error 'This script requires an internet connection.'
+ls /sys/firmware/efi/efivars &>/dev/null \
+    || error 'This script is intended for UEFI systems only.'
+$error && exit 1
+
+select_drive() {
+    [[ -z "$drive" ]] && lsblk -f
+    read -ep 'Select a drive: ' drive
+    [[ ! -e "$drive" ]] \
+        && error 'Please enter an existing drive.' \
+        && select_drive
+}
+select_drive
+avail=$(echo "$(lsblk -bdn --output SIZE "$drive") / 1000" | bc)
+
+ram="$(awk -F" " '$1~/MemTotal/{print $2}' /proc/meminfo)"
+if ((ram < 262145)); then
+    swap=$((ram * 2))
+elif ((ram < 1048576)); then
+    swap=524288
+else
+    swap=$(echo "$ram / 2" | bc)
+fi
+((swap > $(echo "$avail / 2" | bc))) \
+    && error 'Not enough disk space to create meaningful swap.' \
+             'Defaulting to 1MiB.' \
+    && swap=1024
+
+read -en 1 -p 'Are you sure you want to format this drive? [y/N]: ' sure
+[[ ${sure,,} != 'y' ]] \
+    && printf 'Aborting' \
+    && exit
+unset sure
+
+set_password() {
+    local p1
+    local p2
+    while [[ -z "$p1" ]]; do
+        read -esp 'Password: ' p1
+        read -esp 'Verify:   ' p2
+        if [[ "$p1" == "$p2" ]]; then
+            printf '%s' "$p1"
+            return
+        else
+            unset p1 p2
+            error 'Passwords must match.'
+        fi
+    done
+}
+
+if $vm; then
+    hostname='arch_vm.'"$(date '+%F.%H:%M')"
+else
+    read -ep 'Hostname: ' hostname
+fi
+read -ep 'Username: ' username
+userpass="$(set_password)"
+userhome="/home/$username/"
+
+printf "label: gpt\n,550M,U\n,${swap}K,S\n,,L\n" | sfdisk "$drive"
+
+printf 'Disk encryption:\n'
+luks_setup() {
+    local lukspass="$(set_password)"
+    if [[ ! -z lukspass ]]; then
+        printf '%s' "$lukspass" \
+            | cryptsetup --label LUKS luksFormat "${drive}3"
+        printf '%s' "$lukspass" \
+            | cryptsetup open "${drive}3" luks
+        mkfs.btrfs -L MAIN /dev/mapper/luks \
+            || luks_setup
+    else
+        luks_setup
+    fi
+}
+
+luks_setup
+
+mount /dev/mapper/luks /mnt
+btrfs subvolume create /mnt/@
+btrfs subvolume create /mnt/@/home
+btrfs subvolume create /mnt/@/opt
+btrfs subvolume create /mnt/@/tmp
+btrfs subvolume create /mnt/@/srv
+btrfs subvolume create /mnt/@/usr
+btrfs subvolume create /mnt/@/usr/local
+btrfs subvolume create /mnt/@/var
+btrfs subvolume create /mnt/@/.snapshots
+umount /mnt
+mount -o compress=zstd,subvol=@               /dev/mapper/luks /mnt
+mkdir -p /mnt/{boot,home,opt,tmp,srv,usr/local,var,.snapshots}
+mount -o compress=zstd,subvol=@/home          /dev/mapper/luks /mnt/home
+mount -o compress=zstd,subvol=@/opt           /dev/mapper/luks /mnt/opt
+mount -o compress=zstd,subvol=@/tmp           /dev/mapper/luks /mnt/tmp
+mount -o compress=zstd,subvol=@/srv           /dev/mapper/luks /mnt/srv
+mount -o compress=zstd,subvol=@/usr           /dev/mapper/luks /mnt/usr
+mount -o compress=zstd,subvol=@/usr/local     /dev/mapper/luks /mnt/usr/local
+mount -o compress=zstd:15,subvol=@/var        /dev/mapper/luks /mnt/var
+mount -o compress=zstd:15,subvol=@/.snapshots /dev/mapper/luks /mnt/.snapshots
+
+mkfs.fat -F32 -n BOOT "${drive}1"
+mount "${drive}1" /mnt/boot
+mkswap -L SWAP "${drive}2"
+swapon "${drive}2"
+
+sed -Ei 's/#(ParallelDownloads =).*$/\1 15\nILoveCandy/;s/#(Color)/\1/' /etc/pacman.conf
+pacstrap -K /mnt base base-devel btrfs-progs linux linux-firmware networkmanager vim git
+
+arch-chroot /mnt systemctl enable NetworkManager
+
+genfstab -U /mnt >> /mnt/etc/fstab
+
+ln -sf /mnt/usr/share/zoneinfo/Europe/London /mnt/etc/localtime
+arch-chroot /mnt hwclock --systohc
+
+sed -Ei 's/#(en_(GB|US)\.UTF-8)/\1/' /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+printf 'LANG=en_GB.UTF8\n' > /mnt/etc/vconsole.conf
+
+sed -Ei 's/(HOOKS=).*/\1\(base udev autodetect modconf kms keyboard keymap consolefont encrypt block btrfs filesystems fsck\)/' \
+    /mnt/etc/mkinitcpio.conf
+arch-chroot /mnt mkinitcpio -p linux
+
+printf '%s\n' "$hostname" > /mnt/etc/hostname
+
+printf '%s:%s\n' root "$userpass" | arch-chroot /mnt chpasswd
+arch-chroot /mnt useradd -mG wheel,audio,video "$username"
+printf '%s:%s\n' "$username" "$userpass" | arch-chroot /mnt chpasswd
+sed -Ei 's/# (\%wheel.*NOPASSWD.*)/\1/' /mnt/etc/sudoers
+
+arch-chroot /mnt bootctl install
+printf '%s\n' 'default arch.conf' \
+              'timeout 0'         \
+              'console-mode max'  \
+              'editor no'         \
+              'auto-firmware no'  \
+    > /mnt/boot/loader/loader.conf
+# Add ucode support
+printf '%s\n' 'title Arch Linux'                              \
+              'linux /vmlinuz-linux'                          \
+              'initrd /initramfs-linux.img'                   \
+              'options root=/dev/mapper/luks cryptdevice=/dev/disk/by-label/LUKS:luks rootflags=subvol=@ rw' \
+    > /mnt/boot/loader/entries/arch.conf
+
+sed -Ei 's/#(ParallelDownloads =).*$/\1 15\nILoveCandy/;s/#(Color)/\1/' /mnt/etc/pacman.conf
+arch-chroot /mnt pacman -Syu
+
+if $noconfig; then
+    reboot
+    exit
+fi
+
+chbash="arch-chroot /mnt sudo -u $username -- bash -c"
+$chbash "(cd && git clone https://aur.archlinux.org/paru-bin)"
+$chbash "(cd ~/paru-bin && makepkg -si)"
+$chbash "(cd && paru -S paru-bin --noconfirm --skipreview)"
+$chbash "rm -rf ~/paru-bin"
+while read program; do
+    $chbash "(cd && paru -S $program --noconfirm --skipreview)"
+done < <(sed -E '/(^#.*|^$)/d' ${dir}programs)
+$chbash "(cd && git clone https://github.com/dairnarth/.dotfiles)"
+$chbash "(cd && rm .bashrc .bash_profile)"
+$chbash "(cd && .dotfiles/dot -i all)"
