@@ -2,6 +2,7 @@
 alacritty
 bat
 bc
+brightnessctl
 dunst
 exa
 firefox
@@ -10,13 +11,16 @@ ghc
 gimp
 htop
 kitty
-light
+libreoffice-still
+lynx
 mpv
 musescore
 neovim
 nitrogen
+npm
 pamixer
 pavucontrol
+playerctl
 pdfarranger
 picom
 qbittorrent
@@ -25,7 +29,6 @@ qtile
 qutebrowser
 ranger
 rclone
-ripgrep-all
 rofi
 rsync
 rustup
@@ -33,17 +36,21 @@ sshfs
 stack
 stow
 sxiv
-texlive-most
+texlive-meta
+texlive-langenglish
 tidy
 tmux
 ttf-anonymous-pro
 unclutter
 unrar
+unzip
 vmpk
 xdo
 xdotool
 xorg
 xorg-xinit
+zathura
+zathura-pdf-mupdf
 
 # aur
 abcm2ps
@@ -52,3 +59,4 @@ blesh-git
 cider-bin
 kmonad-bin
 pmidi
+youtube-dl-git
